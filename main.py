@@ -9,6 +9,10 @@ import os
 import json
 import asyncio
 from typing import Optional
+from fastapi import Body
+
+from pydantic import BaseModel
+
 
 # Database configuration
 DATABASE_URL = os.getenv(
@@ -131,6 +135,34 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
     return book
 
 
+class BookUpdate(BaseModel):
+    title: str | None = None
+    pages: int | None = None
+
+@app.patch("/books/{book_id}", response_model=BookResponse)
+def update_book_partial(
+    book_id: int,
+    book_update: BookUpdate = Body(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Partially update fields of a book record.
+    
+    - **book_id**: The ID of the book to update
+    - **title**: (optional) New title of the book
+    - **pages**: (optional) New number of pages for the book
+    """
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    update_data = book_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(book, field, value)
+    db.commit()
+    db.refresh(book)
+    return book
+
+
 @app.websocket("/ws/books")
 async def websocket_books(websocket: WebSocket):
     """
@@ -179,11 +211,27 @@ async def websocket_books(websocket: WebSocket):
             # Convert MongoDB documents to JSON-serializable format
             books_data = []
             for book in books:
-                book_data = {
-                    "id": str(book.get("_id", "")),
-                    "title": book.get("title", ""),
-                    "pages": book.get("pages", 0)
-                }
+                # Handle both old format (with envelope) and new format (direct data)
+                if "after" in book:
+                    # Old format with Debezium envelope - extract from 'after'
+                    after_data = book.get("after", {})
+                    book_data = {
+                        "id": str(after_data.get("id", "")),
+                        "title": after_data.get("title", ""),
+                        "pages": int(after_data.get("pages", 0)) if after_data.get("pages") is not None else 0
+                    }
+                else:
+                    # New format - direct data (after transform extracts 'after' field)
+                    # _id should be the PostgreSQL id (set by PartialKeyStrategy)
+                    # Also check for id field in case it's also present
+                    doc_id = book.get("_id")
+                    if doc_id is None:
+                        doc_id = book.get("id")
+                    book_data = {
+                        "id": str(doc_id) if doc_id is not None else "",
+                        "title": book.get("title", ""),
+                        "pages": int(book.get("pages", 0)) if book.get("pages") is not None else 0
+                    }
                 books_data.append(book_data)
             return books_data
         except Exception as e:
@@ -223,11 +271,27 @@ async def websocket_books(websocket: WebSocket):
                             # New document inserted
                             full_document = change.get("fullDocument")
                             if full_document:
-                                book_data = {
-                                    "id": str(full_document.get("_id", "")),
-                                    "title": full_document.get("title", ""),
-                                    "pages": full_document.get("pages", 0)
-                                }
+                                # Handle both old format (with envelope) and new format (direct data)
+                                if "after" in full_document:
+                                    # Old format with Debezium envelope
+                                    after_data = full_document.get("after", {})
+                                    book_data = {
+                                        "id": str(after_data.get("id", "")),
+                                        "title": after_data.get("title", ""),
+                                        "pages": int(after_data.get("pages", 0)) if after_data.get("pages") is not None else 0
+                                    }
+                                else:
+                                    # New format - direct data
+                                    # _id should be the PostgreSQL id (set by PartialKeyStrategy)
+                                    # Also check for id field in case it's also present
+                                    doc_id = full_document.get("_id")
+                                    if doc_id is None:
+                                        doc_id = full_document.get("id")
+                                    book_data = {
+                                        "id": str(doc_id) if doc_id is not None else "",
+                                        "title": full_document.get("title", ""),
+                                        "pages": int(full_document.get("pages", 0)) if full_document.get("pages") is not None else 0
+                                    }
                                 
                                 # Send new book to client
                                 await safe_send_json({
