@@ -19,7 +19,7 @@ DATABASE_URL = os.getenv(
 # MongoDB configuration
 MONGO_URL = os.getenv(
     "MONGO_URL",
-    "mongodb://admin:root@localhost:27017/"
+    "mongodb://admin:root@localhost:27017/test"
 )
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "test")
 
@@ -77,6 +77,18 @@ def get_db():
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Books API"}
+@app.delete("/books/{book_id}", status_code=204)
+def delete_book(book_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a book from the database by its ID.
+
+    - **book_id**: The ID of the book to delete
+    """
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    db.delete(book)
+    db.commit()
 
 
 @app.post("/books", response_model=BookResponse, status_code=201)
@@ -125,35 +137,75 @@ async def websocket_books(websocket: WebSocket):
     WebSocket endpoint that reads books from MongoDB and pushes new entries in real-time.
     Sends all books from MongoDB collection when client connects, then watches for new entries.
     """
+    # Accept the websocket connection first
     await websocket.accept()
+    
+    # Send a connection confirmation immediately to complete handshake
+    try:
+        await websocket.send_json({
+            "type": "connected",
+            "message": "WebSocket connection established"
+        })
+    except Exception:
+        # If we can't send, connection is already broken
+        return
+    
+    # Helper function to safely send JSON
+    async def safe_send_json(data: dict):
+        """Safely send JSON, handling closed websocket"""
+        try:
+            await websocket.send_json(data)
+        except (RuntimeError, WebSocketDisconnect, Exception):
+            # Websocket is already closed or disconnected
+            pass
+    
+    # Helper function to safely close websocket
+    async def safe_close():
+        """Safely close websocket if still connected"""
+        try:
+            await websocket.close()
+        except (RuntimeError, WebSocketDisconnect, Exception):
+            # Websocket is already closed or disconnected
+            pass
+    
+    # Helper function to fetch books from MongoDB (async wrapper for blocking operation)
+    async def fetch_books():
+        """Fetch books from MongoDB in a separate thread to avoid blocking"""
+        try:
+            books_collection = mongo_db.books
+            # Run blocking MongoDB operation in thread pool
+            books = await asyncio.to_thread(lambda: list(books_collection.find({})))
+            
+            # Convert MongoDB documents to JSON-serializable format
+            books_data = []
+            for book in books:
+                book_data = {
+                    "id": str(book.get("_id", "")),
+                    "title": book.get("title", ""),
+                    "pages": book.get("pages", 0)
+                }
+                books_data.append(book_data)
+            return books_data
+        except Exception as e:
+            raise Exception(f"Error fetching books: {str(e)}")
+    
+    watch_task = None
+    change_stream = None
+    running = True
     
     try:
         # Get books collection from MongoDB
         books_collection = mongo_db.books
         
-        # Fetch all books from MongoDB
-        books = list(books_collection.find({}))
-        
-        # Convert MongoDB documents to JSON-serializable format
-        books_data = []
-        for book in books:
-            book_data = {
-                "id": str(book.get("_id", "")),
-                "title": book.get("title", ""),
-                "pages": book.get("pages", 0)
-            }
-            books_data.append(book_data)
+        # Fetch all books from MongoDB (non-blocking)
+        books_data = await fetch_books()
         
         # Send initial books data to client
-        await websocket.send_json({
+        await safe_send_json({
             "type": "books",
             "data": books_data,
             "count": len(books_data)
         })
-        
-        # Flag to control the change stream loop
-        running = True
-        change_stream = None
         
         async def watch_changes_async():
             """Async wrapper for MongoDB change stream to watch for new book insertions"""
@@ -178,7 +230,7 @@ async def websocket_books(websocket: WebSocket):
                                 }
                                 
                                 # Send new book to client
-                                await websocket.send_json({
+                                await safe_send_json({
                                     "type": "new_book",
                                     "data": book_data
                                 })
@@ -190,23 +242,17 @@ async def websocket_books(websocket: WebSocket):
                         break
                     except Exception as e:
                         if running:
-                            try:
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": f"Error watching changes: {str(e)}"
-                                })
-                            except:
-                                pass
+                            await safe_send_json({
+                                "type": "error",
+                                "message": f"Error watching changes: {str(e)}"
+                            })
                         break
             except Exception as e:
                 if running:
-                    try:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": f"Change stream error: {str(e)}"
-                        })
-                    except:
-                        pass
+                    await safe_send_json({
+                        "type": "error",
+                        "message": f"Change stream error: {str(e)}"
+                    })
             finally:
                 if change_stream is not None:
                     try:
@@ -225,44 +271,36 @@ async def websocket_books(websocket: WebSocket):
                 
                 # If client sends a request, send books again
                 if message.lower() == "refresh":
-                    books = list(books_collection.find({}))
-                    books_data = []
-                    for book in books:
-                        book_data = {
-                            "id": str(book.get("_id", "")),
-                            "title": book.get("title", ""),
-                            "pages": book.get("pages", 0)
-                        }
-                        books_data.append(book_data)
+                    # Fetch books asynchronously
+                    books_data = await fetch_books()
                     
-                    await websocket.send_json({
+                    await safe_send_json({
                         "type": "books",
                         "data": books_data,
                         "count": len(books_data)
                     })
                     
             except WebSocketDisconnect:
+                # Client disconnected, websocket is already closed
                 running = False
-                watch_task.cancel()
+                if watch_task:
+                    watch_task.cancel()
                 break
                 
     except Exception as e:
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e)
-            })
-        except:
-            pass
+        await safe_send_json({
+            "type": "error",
+            "message": str(e)
+        })
     finally:
         running = False
-        if 'watch_task' in locals():
+        if watch_task:
             watch_task.cancel()
             try:
                 await watch_task
             except asyncio.CancelledError:
                 pass
-        await websocket.close()
+        await safe_close()
 
 
 

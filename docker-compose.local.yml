@@ -15,8 +15,101 @@ services:
           openssl rand -base64 756 > /data/db/replica-set-key
           chmod 600 /data/db/replica-set-key
         fi
+        
+        # Check if admin user exists by checking for the marker file
+        if [ ! -f /data/db/.admin_user_created ]; then
+          echo "Initializing MongoDB and creating admin user..."
+          # Start MongoDB without keyFile first to allow initialization
+          mkdir -p /var/log/mongodb
+          mongod --bind_ip_all --fork --logpath /var/log/mongodb/mongod.log
+          
+          # Wait for MongoDB to be ready
+          echo "Waiting for MongoDB to start..."
+          for i in {1..30}; do
+            if mongosh --quiet --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+              echo "MongoDB is ready!"
+              break
+            fi
+            sleep 1
+          done
+          
+          # Create admin user (before replica set initialization)
+          echo "Creating admin user..."
+          mongosh admin --eval "
+            try {
+              db.createUser({
+                user: 'admin',
+                pwd: 'root',
+                roles: [{ role: 'root', db: 'admin' }]
+              });
+              print('Admin user created successfully');
+            } catch(e) {
+              if (e.code === 51003) {
+                print('Admin user already exists');
+              } else {
+                throw e;
+              }
+            }
+          "
+          
+          # Stop MongoDB to restart with replica set
+          echo "Stopping MongoDB to restart with replica set..."
+          mongosh admin --eval "db.shutdownServer()"
+          sleep 3
+          
+          # Start MongoDB with replica set (still without keyFile for now)
+          mongod --replSet rs0 --bind_ip_all --fork --logpath /var/log/mongodb/mongod.log
+          sleep 5
+          
+          # Initialize replica set if not already initialized
+          echo "Initializing replica set..."
+          mongosh admin --eval "
+            try {
+              var status = rs.status();
+              print('Replica set already initialized');
+              // Check if host is localhost and needs to be updated
+              var cfg = rs.conf();
+              if (cfg.members[0].host === 'localhost:27017') {
+                print('Updating replica set host from localhost to mongodb...');
+                cfg.members[0].host = 'mongodb:27017';
+                rs.reconfig(cfg);
+                print('Replica set host updated to mongodb:27017');
+              }
+            } catch(e) {
+              if (e.code === 94) {
+                rs.initiate({
+                  _id: 'rs0',
+                  members: [{ _id: 0, host: 'mongodb:27017' }]
+                });
+                print('Replica set initialized with mongodb:27017');
+              } else {
+                throw e;
+              }
+            }
+          "
+          
+          # Wait for replica set to become primary
+          echo "Waiting for replica set to become primary..."
+          for i in {1..30}; do
+            if mongosh admin --quiet --eval "rs.isMaster().ismaster" 2>/dev/null | grep -q "true"; then
+              echo "Replica set is primary!"
+              break
+            fi
+            sleep 1
+          done
+          
+          # Mark admin user as created
+          touch /data/db/.admin_user_created
+          echo "Admin user initialization complete"
+          
+          # Stop MongoDB
+          mongosh admin --eval "db.shutdownServer()"
+          sleep 3
+        fi
+        
         # Start MongoDB with replica set and keyFile
         # Bind to 0.0.0.0 to accept connections from other containers
+        echo "Starting MongoDB with replica set and keyFile..."
         exec mongod --replSet rs0 --keyFile /data/db/replica-set-key --bind_ip_all
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin

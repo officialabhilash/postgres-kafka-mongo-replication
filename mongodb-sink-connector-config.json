@@ -1,21 +1,23 @@
 {
   "name": "mongodb-sink-connector",
   "config": {
-    "connector.class": "io.debezium.connector.mongodb.MongoDbSinkConnector",
+    "connector.class": "com.mongodb.kafka.connect.MongoSinkConnector",
     "tasks.max": "1",
     "topics": "postgresql_server.public.books",
-    "mongodb.connection.string": "mongodb://admin:root@mongodb:27017/test?replicaSet=rs0&authSource=admin",
-    "sink.database": "test",
-    "sink.collection": "books",
+    "connection.uri": "mongodb://admin:root@mongodb:27017/test?replicaSet=rs0&authSource=admin",
+    "database": "test",
+    "collection": "books",
     "key.converter": "org.apache.kafka.connect.json.JsonConverter",
     "value.converter": "org.apache.kafka.connect.json.JsonConverter",
     "key.converter.schemas.enable": "false",
     "value.converter.schemas.enable": "false",
-    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.PartialValueStrategy",
-    "document.id.strategy.partial.value.projection.type": "allowlist",
-    "document.id.strategy.partial.value.projection.list": "id",
+    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.PartialKeyStrategy",
+    "document.id.strategy.partial.key.projection.type": "AllowList",
+    "document.id.strategy.partial.key.projection.list": "id",
     "writemodel.strategy": "com.mongodb.kafka.connect.sink.writemodel.strategy.ReplaceOneBusinessKeyStrategy",
+    "delete.on.null.values": "true",
     "errors.tolerance": "all",
-    "errors.log.enable": "true"
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
   }
 }
