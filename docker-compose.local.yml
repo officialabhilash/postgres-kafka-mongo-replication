@@ -1,0 +1,168 @@
+services:
+
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb_db
+    restart: always
+    ports:
+      - "27017:27017"
+    command: 
+      - "bash"
+      - "-c"
+      - |
+        # Generate keyFile for replica set authentication if it doesn't exist
+        if [ ! -f /data/db/replica-set-key ]; then
+          openssl rand -base64 756 > /data/db/replica-set-key
+          chmod 600 /data/db/replica-set-key
+        fi
+        # Start MongoDB with replica set and keyFile
+        # Bind to 0.0.0.0 to accept connections from other containers
+        exec mongod --replSet rs0 --keyFile /data/db/replica-set-key --bind_ip_all
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: root
+    volumes:
+      - ./data/mongo:/data/db
+
+  postgresql:
+    image: postgres:17
+    container_name: postgresql_db
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: root
+      POSTGRES_USER: admin
+      POSTGRES_DB: test
+    command: 
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+    volumes:
+      - ./initialize.sql:/docker-entrypoint-initdb.d/initialize.sql
+      - ./data/postgres:/var/lib/postgresql/data
+    
+  kafka:
+    # Official Apache Kafka image
+    image: apache/kafka:latest 
+    container_name: kafka
+    restart: always
+    environment:
+      # Required for KRaft
+      KAFKA_CLUSTER_ID: "4L6g3nShT-eMCtK--X86sw"
+      # KRaft mode configuration
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      # Listeners: PLAINTEXT for clients, CONTROLLER for KRaft quorum
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_JMX_PORT: 9999
+    command: 
+      - "/bin/sh"
+      - "-c"
+      # Override properties for Docker networking and format storage
+      - |
+        set -e
+        # Get cluster ID from environment variable (set in docker-compose)
+        CLUSTER_ID="4L6g3nShT-eMCtK--X86sw"
+        echo "Using cluster ID: ${CLUSTER_ID}"
+        cp /opt/kafka/config/server.properties /tmp/server.properties
+        # Override listeners to bind to all interfaces
+        sed -i 's|^listeners=.*|listeners=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093|' /tmp/server.properties
+        # Override advertised listeners to use Docker service name
+        sed -i 's|^advertised.listeners=.*|advertised.listeners=PLAINTEXT://kafka:9092|' /tmp/server.properties
+        # Override controller quorum voters to use Docker service name
+        sed -i 's|^controller.quorum.voters=.*|controller.quorum.voters=1@kafka:9093|' /tmp/server.properties
+        # Ensure log directory exists and has correct permissions
+        # If mounted volume has wrong permissions, create a subdirectory we can write to
+        mkdir -p /tmp/kraft-combined-logs
+        # Try to fix permissions, if that fails, the volume mount might need host-side fix
+        chmod -R 777 /tmp/kraft-combined-logs 2>/dev/null || true
+        # Verify we can write to the directory
+        touch /tmp/kraft-combined-logs/.write_test 2>/dev/null && rm -f /tmp/kraft-combined-logs/.write_test || {
+          echo "ERROR: Cannot write to /tmp/kraft-combined-logs. Please fix permissions on host: sudo chown -R 1000:1000 ./data/kafka"
+          exit 1
+        }
+        # Format storage - check if already formatted first
+        if [ ! -f /tmp/kraft-combined-logs/meta.properties ]; then
+          echo "Formatting Kafka storage with cluster ID: ${CLUSTER_ID}"
+          # Use --standalone for single-node KRaft cluster
+          /opt/kafka/bin/kafka-storage.sh format --cluster-id "${CLUSTER_ID}" --config /tmp/server.properties --standalone
+          echo "Format completed successfully"
+        else
+          echo "Kafka storage already formatted, skipping format step"
+        fi
+        # Start Kafka
+        exec /opt/kafka/bin/kafka-server-start.sh /tmp/server.properties
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    volumes:
+      - ./data/kafka:/tmp/kraft-combined-logs
+  
+  connect:
+    # Uses the official Debezium Kafka Connect image
+    image: debezium/connect:3.0.0.Final
+    container_name: kafka-connect
+    restart: always
+    ports:
+      - "8083:8083" # Kafka Connect REST API
+    environment:
+      # Connect to the Kafka Broker internal service name
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: cdc-connect-group
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_statuses
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: 'false'
+      VALUE_CONVERTER_SCHEMAS_ENABLE: 'false'
+      # Point to the directory where connectors are mounted
+      CONNECT_PLUGIN_PATH: /kafka/connect,/kafka/libs,/kafka/connectors
+    depends_on:
+      kafka:
+        condition: service_started
+      postgresql:
+        condition: service_started
+      mongodb:
+        condition: service_started
+    volumes:
+      # Mount the downloaded connector JARs into the Debezium plugin path used by the container
+      - ./connectors/debezium:/kafka/connect/debezium
+      - ./connectors/mongodb:/kafka/connect/mongodb
+  
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: Local-KRaft-Cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: debezium-connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://connect:8083
+    depends_on:
+      kafka:
+        condition: service_started
+      connect:
+        condition: service_started

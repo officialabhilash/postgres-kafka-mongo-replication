@@ -1,0 +1,21 @@
+{
+  "name": "mongodb-sink-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.mongodb.MongoDbSinkConnector",
+    "tasks.max": "1",
+    "topics": "postgresql_server.public.books",
+    "mongodb.connection.string": "mongodb://admin:root@mongodb:27017/test?replicaSet=rs0&authSource=admin",
+    "sink.database": "test",
+    "sink.collection": "books",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false",
+    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.PartialValueStrategy",
+    "document.id.strategy.partial.value.projection.type": "allowlist",
+    "document.id.strategy.partial.value.projection.list": "id",
+    "writemodel.strategy": "com.mongodb.kafka.connect.sink.writemodel.strategy.ReplaceOneBusinessKeyStrategy",
+    "errors.tolerance": "all",
+    "errors.log.enable": "true"
+  }
+}
