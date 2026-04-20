@@ -19,11 +19,6 @@
     "value.converter": "org.apache.kafka.connect.json.JsonConverter",
     "key.converter.schemas.enable": "false",
     "value.converter.schemas.enable": "false",
-    "topic.prefix": "postgresql_server",
-    "transforms": "unwrap",
-    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
-    "transforms.unwrap.drop.tombstones": "false",
-    "transforms.unwrap.delete.handling.mode": "none",
-    "transforms.unwrap.add.fields": "op"
+    "topic.prefix": "postgresql_server"
   }
 }

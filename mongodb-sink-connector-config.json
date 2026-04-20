@@ -11,13 +11,6 @@
     "value.converter": "org.apache.kafka.connect.json.JsonConverter",
     "key.converter.schemas.enable": "false",
     "value.converter.schemas.enable": "false",
-    "document.id.strategy": "com.mongodb.kafka.connect.sink.processor.id.strategy.PartialKeyStrategy",
-    "document.id.strategy.partial.key.projection.type": "AllowList",
-    "document.id.strategy.partial.key.projection.list": "id",
-    "writemodel.strategy": "com.mongodb.kafka.connect.sink.writemodel.strategy.ReplaceOneBusinessKeyStrategy",
-    "delete.on.null.values": "true",
-    "errors.tolerance": "all",
-    "errors.log.enable": "true",
-    "errors.log.include.messages": "true"
+    "change.data.capture.handler": "com.mongodb.kafka.connect.sink.cdc.debezium.rdbms.RdbmsHandler"
   }
 }

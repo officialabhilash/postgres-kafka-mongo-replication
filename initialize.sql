@@ -10,7 +10,7 @@ CREATE USER cdc_user WITH REPLICATION ENCRYPTED PASSWORD 'root';
 GRANT SELECT ON TABLE books TO cdc_user;
 GRANT USAGE ON SCHEMA public TO cdc_user;
 
-ALTER TABLE books REPLICA IDENTITY USING INDEX books_pkey;
+ALTER TABLE books REPLICA IDENTITY FULL;
 
 -- Create publication for CDC: we can use this publication 
 -- to replicate the changes to the other database.
