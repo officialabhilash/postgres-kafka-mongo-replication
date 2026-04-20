@@ -259,3 +259,25 @@ services:
         condition: service_started
       connect:
         condition: service_started
+  
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      # --- Grafana Live & Real-time Settings ---
+      - GF_LIVE_ENABLED=true
+      - GF_LIVE_MAX_CONNECTIONS=1000
+      - GF_LIVE_ALLOWED_ORIGINS=* # Tighten this in production
+      
+      # --- Performance & Permissions ---
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_PLUGINS_PREINSTALL=volkovlabs-websocket-datasource,volkovlabs-business-input-datasource
+      
+      # --- Database & Storage ---
+      - GF_DATABASE_TYPE=postgres # Default, use Postgres if scaling for high HA
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+    restart: unless-stopped
