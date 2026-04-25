@@ -1,221 +1,160 @@
-# PostgreSQL CDC Setup with Kafka Connect
+# Real-Time Dashboards
 
-## Overview
-This guide explains how to integrate PostgreSQL with Kafka Connect using Debezium for Change Data Capture (CDC).
+A proof-of-concept for a real-time analytics dashboard built on a CDC (Change Data Capture) pipeline. Data mutations in PostgreSQL propagate automatically through Kafka to downstream consumers, enabling live Grafana dashboards with no polling.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Data Entry                                 │
+│                    FastAPI  (port 8000)                             │
+│                  POST / PATCH / DELETE /books                       │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │ SQL writes
+                             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                   PostgreSQL 17  (port 5432)                       │
+│          wal_level=logical  │  cdc_publication  │  pgoutput slot   │
+└────────────────────────────┬───────────────────────────────────────┘
+                             │ WAL (logical replication)
+                             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│            Kafka Connect / Debezium  (port 8083)                   │
+│              postgres-source-connector (pgoutput)                  │
+└────────────────────────────┬───────────────────────────────────────┘
+                             │ CDC events (insert / update / delete)
+                             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                  Apache Kafka  (port 9092, KRaft)                  │
+│              topic: postgresql_server.public.books                 │
+└─────────────────────────────────────────────────────────────────────┘
+                             │ CDC events (insert / update / delete)
+                             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                    Apache Flink  (local)                           │
+│              aggregations / analytics transformations              │
+└────────────────────────────┬───────────────────────────────────────┘
+                             │ transformed time-series data
+                             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                       TimescaleDB                                  │
+│                     time-series tables                             │
+└────────────────────────────┬───────────────────────────────────────┘
+                             │ live SQL connection
+                             ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                    Grafana  (port 3000)                            │
+│                    TimescaleDB datasource                          │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+## Components
+
+| Service | Image | Port | Role |
+|---|---|------|---|
+| FastAPI | Python 3.14 | 8000 | REST API — data entry point |
+| PostgreSQL | postgres:17 | 5432 | Source of truth, WAL CDC enabled |
+| Kafka | apache/kafka (KRaft) | 9092 | Event streaming backbone |
+| Kafka Connect | debezium/connect:3.0.0.Final | 8083 | CDC source connector |
+| Kafka UI | provectuslabs/kafka-ui | 8080 | Kafka cluster browser |
+| Apache Flink | flink (local) | 8081 | Stream processing, aggregations, analytics |
+| TimescaleDB | timescaledb | 5433 | Time-series sink for analytics data |
+| Grafana | grafana/grafana-oss | 3000 | Dashboard visualization |
+
+## Data Flow
+
+1. A client calls `POST /books`, `PATCH /books/{id}`, or `DELETE /books/{id}` on the FastAPI backend.
+2. FastAPI writes the change to **PostgreSQL**.
+3. PostgreSQL emits a WAL entry via the `cdc_publication` / `pgoutput` logical replication slot.
+4. **Debezium** (Kafka Connect) reads the WAL and publishes a CDC envelope message to the Kafka topic `postgresql_server.public.books`.
+5. **Apache Flink** consumes the topic, applies aggregations and analytics transformations, and writes the results to **TimescaleDB**.
+6. **Grafana** queries TimescaleDB on a live connection and renders real-time dashboard panels.
+
+## Project Structure
+
+```
+.
+├── main.py                              # FastAPI app (REST + WebSocket)
+├── initialize.sql                       # PostgreSQL schema, CDC user, publication, replication slot
+├── docker-compose.local.yml             # All services
+├── INITIALIZEME.sh                      # One-shot setup script
+├── postgres-connector-config.json       # Debezium PostgreSQL source connector config
+├── register-postgres-connector.sh       # Register / update PostgreSQL connector via REST
+├── delete-postgres-connector.sh         # Delete PostgreSQL connector
+├── flink/                               # Flink jobs
+├── data/                                # Persistent volumes (postgres, kafka, grafana)
+└── requirements.txt                     # Python dependencies
+```
 
 ## Prerequisites
-✅ PostgreSQL with logical replication enabled  
-✅ Publication `cdc_publication` created  
-✅ Replication slot `books_cdc_slot` created  
-✅ Kafka and Kafka Connect running  
 
-## JAR Files Location
+- Docker and Docker Compose
+- Python 3.14+ with `pip`
+- Connector JARs in `./connectors/debezium` and `./connectors/mongodb` (excluded from repo)
 
-### Good News: JAR Files Are Already Included!
-The `debezium/connect:3.0.0.Final` Docker image **already includes** all Debezium connectors, including:
-- PostgreSQL Connector
-- MongoDB Connector  
-- MySQL Connector
-- And more...
+## Quick Start
 
-**You don't need to download JAR files separately!**
+### 1. Start all services and register connectors
 
-### If You Need JAR Files Separately
-If you want to download JAR files manually (for custom setups), you can get them from:
-
-1. **Maven Central Repository:**
-   ```
-   https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/
-   ```
-
-2. **Debezium Releases:**
-   ```
-   https://debezium.io/releases/
-   ```
-
-3. **Direct Download (PostgreSQL Connector 3.0.0.Final):**
-   ```bash
-   wget https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.0.0.Final/debezium-connector-postgres-3.0.0.Final-plugin.tar.gz
-   ```
-
-## Registering the Connector
-
-### Method 1: Using the Script (Recommended)
 ```bash
+chmod +x INITIALIZEME.sh
+./INITIALIZEME.sh
+```
+
+This brings up all Docker services, waits for them to be ready, fixes volume permissions, then registers the PostgreSQL CDC connector.
+
+### 2. Start the FastAPI backend
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+API docs available at `http://localhost:8000/docs`.
+
+### 3. Open Grafana
+
+Navigate to `http://localhost:3000`. Anonymous access is enabled with Admin role.
+
+Add a TimescaleDB datasource and create panels against the analytics tables written by Flink.
+
+## API Reference
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Health check |
+| `POST` | `/books` | Create a book |
+| `GET` | `/books` | List books (pagination: `skip`, `limit`) |
+| `GET` | `/books/{id}` | Get a book by ID |
+| `PATCH` | `/books/{id}` | Partial update (title and/or pages) |
+| `DELETE` | `/books/{id}` | Delete a book |
+
+## PostgreSQL CDC Setup
+
+`initialize.sql` configures the source database on first start:
+
+- Creates the `books` table
+- Creates a `cdc_user` with `REPLICATION` role and `SELECT` on `books`
+- Sets `REPLICA IDENTITY FULL` so deletes/updates emit full row data
+- Creates `cdc_publication` scoped to the `books` table
+- Creates the `books_cdc_slot` logical replication slot (`pgoutput`)
+
+## Connector Management
+
+```bash
+# Register or update connector
 ./register-postgres-connector.sh
+
+# Remove connector
+./delete-postgres-connector.sh
 ```
 
-### Method 2: Using curl directly
-```bash
-curl -X POST http://localhost:8083/connectors \
-  -H "Content-Type: application/json" \
-  -d @postgres-connector-config.json
-```
+Connector config is in `postgres-connector-config.json`. Kafka Connect REST API is available at `http://localhost:8083`.
 
-### Method 3: Using Kafka UI
-1. Open http://localhost:8080
-2. Go to "Connectors" section
-3. Click "Add Connector"
-4. Paste the JSON from `postgres-connector-config.json`
+## Kafka UI
 
-## Verifying the Setup
+Browse topics, consumer groups, and connector status at `http://localhost:8080`.
 
-### Check Connector Status
-```bash
-curl http://localhost:8083/connectors/postgres-connector/status
-```
+## License
 
-### Check Kafka Topics
-```bash
-# List topics
-docker exec kafka /opt/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092
-
-# Should see: postgresql_server.public.books
-```
-
-### Consume Messages
-```bash
-docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 \
-  --topic postgresql_server.public.books \
-  --from-beginning
-```
-
-## Testing CDC
-
-1. **Insert a record in PostgreSQL:**
-   ```sql
-   INSERT INTO books (title, pages) VALUES ('Test Book', 100);
-   ```
-
-2. **Check Kafka topic** - you should see the change event
-
-3. **Update a record:**
-   ```sql
-   UPDATE books SET pages = 200 WHERE id = 1;
-   ```
-
-4. **Delete a record:**
-   ```sql
-   DELETE FROM books WHERE id = 1;
-   ```
-
-## Troubleshooting
-
-### Connector Not Starting
-- Check logs: `docker logs kafka-connect`
-- Verify PostgreSQL is accessible from Connect container
-- Ensure publication and slot exist
-
-### No Messages in Kafka
-- Verify connector is running: `curl http://localhost:8083/connectors/postgres-connector/status`
-- Check PostgreSQL WAL level: `SHOW wal_level;` (should be 'logical')
-- Verify publication: `SELECT * FROM pg_publication;`
-
-### Permission Issues
-- Ensure `cdc_user` has REPLICATION privilege
-- Check replication slot exists: `SELECT * FROM pg_replication_slots;`
-
-## Configuration Details
-
-The connector configuration uses:
-- **Publication**: `cdc_publication` (pre-created)
-- **Replication Slot**: `books_cdc_slot` (pre-created)
-- **Plugin**: `pgoutput` (PostgreSQL's native logical replication)
-- **Topic Naming**: `{database.server.name}.{schema}.{table}` = `postgresql_server.public.books`
-
-## MongoDB Sink Connector Setup
-
-### Overview
-The MongoDB **SINK** connector reads change events from PostgreSQL CDC topics and writes them to MongoDB. This creates a real-time sync from PostgreSQL to MongoDB.
-
-**Data Flow:**
-```
-PostgreSQL → (PostgreSQL Source Connector) → Kafka Topic → (MongoDB Sink Connector) → MongoDB
-```
-
-### Prerequisites
-✅ PostgreSQL source connector running and capturing changes  
-✅ MongoDB with replica set initialized (rs0)  
-✅ MongoDB authentication configured  
-✅ Kafka and Kafka Connect running  
-
-### Registering MongoDB Sink Connector
-
-#### Method 1: Using the Script (Recommended)
-```bash
-./register-mongodb-sink-connector.sh
-```
-
-#### Method 2: Using curl directly
-```bash
-curl -X POST http://localhost:8083/connectors \
-  -H "Content-Type: application/json" \
-  -d @mongodb-sink-connector-config.json
-```
-
-#### Method 3: Using Kafka UI
-1. Open http://localhost:8080
-2. Go to "Connectors" section
-3. Click "Add Connector"
-4. Paste the JSON from `mongodb-sink-connector-config.json`
-
-### Verifying MongoDB Sink Connector
-
-#### Check Connector Status
-```bash
-curl http://localhost:8083/connectors/mongodb-sink-connector/status
-```
-
-#### Check Kafka Topics
-```bash
-# List topics
-docker exec kafka /opt/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092
-
-# Should see: postgresql_server.public.books (source topic)
-```
-
-### Testing the Complete Pipeline
-
-1. **Insert a record in PostgreSQL:**
-   ```sql
-   INSERT INTO books (title, pages) VALUES ('Test Book', 100);
-   ```
-
-2. **Check MongoDB** - the document should appear:
-   ```javascript
-   db.books.find().pretty()
-   ```
-
-3. **Update a record in PostgreSQL:**
-   ```sql
-   UPDATE books SET pages = 200 WHERE id = 1;
-   ```
-
-4. **Check MongoDB** - the document should be updated
-
-5. **Delete a record in PostgreSQL:**
-   ```sql
-   DELETE FROM books WHERE id = 1;
-   ```
-
-6. **Check MongoDB** - the document should be deleted
-
-### MongoDB Sink Configuration Details
-
-The sink connector configuration:
-- **Source Topic**: `postgresql_server.public.books` (from PostgreSQL CDC)
-- **MongoDB Connection**: `mongodb://admin:root@mongodb:27017/?replicaSet=rs0&authSource=admin`
-- **Target Database**: `test`
-- **Target Collection**: `books`
-- **Document ID Strategy**: Uses `id` field from PostgreSQL as MongoDB document `_id`
-- **Write Strategy**: Replace documents based on business key (id)
-
-## Next Steps
-
-After CDC is working for both PostgreSQL and MongoDB, you can:
-1. Set up consumers to process change events from both sources
-2. Build real-time dashboards using the change streams
-3. Set up data pipelines to sync between databases
-4. Create real-time analytics dashboards
-
+MIT
