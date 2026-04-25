@@ -138,7 +138,21 @@ services:
     volumes:
       - ./initialize.sql:/docker-entrypoint-initdb.d/initialize.sql
       - ./data/postgres:/var/lib/postgresql/data
-    
+
+  timescale_db:
+    image: timescale/timescaledb:latest-pg17
+    container_name: timescale_db
+    restart: always
+    ports:
+      - "5431:5432"
+    environment:
+      POSTGRES_PASSWORD: root
+      POSTGRES_USER: admin
+      POSTGRES_DB: analytics
+    volumes:
+      - ./initialize_timescale.sql:/docker-entrypoint-initdb.d/initialize_timescale.sql
+      - ./data/timescale:/var/lib/postgresql/data
+
   kafka:
     # Official Apache Kafka image
     image: apache/kafka:latest 
@@ -241,7 +255,6 @@ services:
       # Mount the downloaded connector JARs into the Debezium plugin path used by the container
       - ./connectors/debezium:/kafka/connect/debezium
       - ./connectors/mongodb:/kafka/connect/mongodb
-  
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest

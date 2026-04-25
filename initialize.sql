@@ -1,7 +1,9 @@
 create table books (
     id serial primary key,
     title varchar(255),
-    pages int
+    pages int,
+    author varchar(255),
+    price int
 );
 
 CREATE USER cdc_user WITH REPLICATION ENCRYPTED PASSWORD 'root';

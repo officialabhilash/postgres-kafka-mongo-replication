@@ -58,7 +58,7 @@ A proof-of-concept for a real-time analytics dashboard built on a CDC (Change Da
 | Kafka Connect | debezium/connect:3.0.0.Final | 8083 | CDC source connector |
 | Kafka UI | provectuslabs/kafka-ui | 8080 | Kafka cluster browser |
 | Apache Flink | flink (local) | 8081 | Stream processing, aggregations, analytics |
-| TimescaleDB | timescaledb | 5433 | Time-series sink for analytics data |
+| TimescaleDB | timescale/timescaledb:latest-pg17 | 5431 | Time-series sink for analytics data |
 | Grafana | grafana/grafana-oss | 3000 | Dashboard visualization |
 
 ## Data Flow
@@ -78,6 +78,7 @@ A proof-of-concept for a real-time analytics dashboard built on a CDC (Change Da
 ├── initialize.sql                       # PostgreSQL schema, CDC user, publication, replication slot
 ├── docker-compose.local.yml             # All services
 ├── INITIALIZEME.sh                      # One-shot setup script
+├── initialize_timescale.sql             # TimescaleDB schema, hypertables, analytics_user
 ├── postgres-connector-config.json       # Debezium PostgreSQL source connector config
 ├── register-postgres-connector.sh       # Register / update PostgreSQL connector via REST
 ├── delete-postgres-connector.sh         # Delete PostgreSQL connector
