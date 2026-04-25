@@ -151,7 +151,7 @@ services:
       POSTGRES_DB: analytics
     volumes:
       - ./initialize_timescale.sql:/docker-entrypoint-initdb.d/initialize_timescale.sql
-      - ./data/timescale:/var/lib/postgresql/data
+      - ./data/timescale:/var/lib/timescale_db/data
 
   kafka:
     # Official Apache Kafka image
@@ -290,7 +290,7 @@ services:
       - GF_PLUGINS_PREINSTALL=volkovlabs-websocket-datasource,volkovlabs-business-input-datasource
       
       # --- Database & Storage ---
-      - GF_DATABASE_TYPE=postgres # Default, use Postgres if scaling for high HA
+      # GF_DATABASE_TYPE defaults to sqlite3, which is sufficient for local dev
     volumes:
       - ./data/grafana:/var/lib/grafana
     restart: unless-stopped

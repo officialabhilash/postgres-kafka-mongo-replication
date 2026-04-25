@@ -149,7 +149,7 @@ Add a TimescaleDB datasource and create panels against the analytics tables writ
 # Remove connector
 ./delete-postgres-connector.sh
 ```
-
+### NOTE: Be sure to add entry for kafka `echo "127.0.0.1 kafka" | sudo tee -a /etc/hosts` before pushing any data for the job. this is something that needs to be done manually. 
 Connector config is in `postgres-connector-config.json`. Kafka Connect REST API is available at `http://localhost:8083`.
 
 ## Kafka UI
