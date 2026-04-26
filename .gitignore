@@ -7,3 +7,5 @@ data
 flink-*
 target
 /flink/dependency-reduced-pom.xml
+
+test_results.csv

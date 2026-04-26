@@ -28,7 +28,13 @@ MONGO_URL = os.getenv(
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "test")
 
 # Create SQLAlchemy engine
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=2000,        # Number of connections to keep open
+    max_overflow=30000,     # How many extra connections to allow during spikes
+    pool_timeout=300,     # How long to wait (in seconds) for a connection before failing
+    pool_recycle=3600    # Reconnect after 1 hour to prevent stale connections
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -367,8 +373,7 @@ async def websocket_books(websocket: WebSocket):
         await safe_close()
 
 
-
 if __name__ == "__main__":
     import uvicorn
     print("Starting server...")
-    uvicorn.run(app, host="localhost", port=8000)
+    uvicorn.run(app, host="localhost", port=8000, workers=5)
