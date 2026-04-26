@@ -119,7 +119,7 @@ public class FirstAggregationPipeline {
         @Override
         public void close() throws Exception {
             if (pstmt != null) pstmt.close();
-            if (conn  != null) conn.close();
+            if (conn != null) conn.close();
         }
     }
 

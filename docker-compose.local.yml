@@ -288,9 +288,6 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_PLUGINS_PREINSTALL=volkovlabs-websocket-datasource,volkovlabs-business-input-datasource
-      
-      # --- Database & Storage ---
-      # GF_DATABASE_TYPE defaults to sqlite3, which is sufficient for local dev
     volumes:
       - ./data/grafana:/var/lib/grafana
     restart: unless-stopped
