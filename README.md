@@ -149,12 +149,22 @@ Add a TimescaleDB datasource and create panels against the analytics tables writ
 # Remove connector
 ./delete-postgres-connector.sh
 ```
-### NOTE: Be sure to add entry for kafka `echo "127.0.0.1 kafka" | sudo tee -a /etc/hosts` before pushing any data for the job. this is something that needs to be done manually. 
+
 Connector config is in `postgres-connector-config.json`. Kafka Connect REST API is available at `http://localhost:8083`.
 
-## Kafka UI
+## Compile the Flink Code (Maven project)
+In `./flink` directory we have a `pom.xml` containing dependencies for the maven project which is the flink job. 
+The class name is `FirstAggregationPipeline`.
 
-Browse topics, consumer groups, and connector status at `http://localhost:8080`.
+You need to run `mvn clean package` to compile the code into `target` folder. The fat jar will then be uploaded onto the flink cluster
+
+## Apache Flink UI
+
+Log on to your flink ui. go to <i>Submit Job</i> menu, and upload the compiled fat jar onto it and hit submit.
+
+# NOTE:
+1. Be sure to add entry for kafka `echo "127.0.0.1 kafka" | sudo tee -a /etc/hosts` before pushing any data for the job. this is something that needs to be done manually.
+2. Be sure to run apache flink cluster manually make sure you upload and then SUBMIT the jar file.
 
 ## License
 
